@@ -13,7 +13,7 @@ using namespace std;
 
 void display(vector<int> &a){for(int z : a)cerr << z << " ";cerr << endl;}
 
-enum Action {LEFT, RIGHT, UP, DOWN, WAIT};
+enum Action {LEFT, RIGHT, UP, DOWN, WAIT, COUNT};
 map<Action, string> action_map = {
     {LEFT, "LEFT"},
     {RIGHT, "RIGHT"},
@@ -25,19 +25,18 @@ map<Action, string> action_map = {
 class GAME;
 class ARCADE;
 class AGENT;
-class ACTION;
 
 
 class GAME{
 public:
     int turn{};
+    int my_player_id;
     vector<ARCADE> arcades;
     //TODO: are we sure we have four arcades;
     map<int, pair<int,int>> current_elo;
 
-    explicit GAME(vector<ARCADE> arcades);
-    void apply_action(ACTION action);
-    int arcade_perfect_score(int id);
+    explicit GAME(int my_player_id, int nb_games);
+    void apply_action(Action action);
 };
 
 
@@ -62,13 +61,14 @@ public:
 
     explicit ARCADE(int my_agent_id);
     AGENT& get_agent(int id);
-    ACTION best_action(AGENT &agent);
+    //ACTION best_action(AGENT &agent);
     void start_game();
     void finish_game();
     void update_ranks();
     void update_advanced_gpu();
     AGENT& my_agent();
     void update(map<string, int> regs, string gpu);
+    void apply_action(Action action);
 };
 
 class AGENT{
@@ -77,26 +77,12 @@ public:
     int position{};
     int stun_timer{};
     int rank{};
-
     AGENT()= default;
-};
-
-class ACTION{
-public:
-    Action action{};
-
-    ACTION()= default;
-    void print();
-    void apply(AGENT& agent, ARCADE& arcade);
-    //void reverse(AGENT& agent, ARCADE& arcade);
-    bool operator<(const ACTION& other) const {
-        return action < other.action;
-    }
 };
 
 //--------------------------------------------ARCADE-----------------------------------------------
 
-ARCADE::ARCADE(int my_agent_id){
+ARCADE::ARCADE(int my_agent_id) : my_agent_id(my_agent_id) {
     agents[0].id = 0;
     agents[1].id = 1;
     agents[2].id = 2;
@@ -144,52 +130,23 @@ void ARCADE::finish_game(){
    game_over = true;
 }
 
-ACTION ARCADE::best_action(AGENT &agent){
-    set<int> hurdles;
-    for(int i = 0; i < gpu.size(); i++){
-        if(gpu[i] == '#'){
-            hurdles.insert(i);
+void ARCADE::apply_action(Action action){
+    if(game_over){
+        // TODO: we should start game
+        //arcade.start_game();
+        return;
+    }
+    for(auto& agent : agents){
+        if(agent.second.stun_timer > 0){
+            agent.second.stun_timer--;
         }
     }
-
-    auto it = hurdles.upper_bound(agent.position);
-
-    ACTION action;
-    action.action = RIGHT;
-    if(it  != hurdles.end()){
-        if(*it - agent.position == 5 || *it - agent.position == 1 || *it - agent.position == 3)
-            action.action = UP;
-        else if(*it - agent.position > 3)
-            action.action = RIGHT;
-        else if(*it - agent.position == 2)
-            action.action = RIGHT;
-        else
-            action.action = RIGHT;
+    if(action == WAIT){
+        return;
     }
-
-    return action;
-}
-
-void ARCADE::update_ranks(){
-    vector<pair<int,int>> tmp;
-    for (auto & [fst, snd] : agents){
-       tmp.emplace_back(snd.position, snd.id);
-    }
-    sort(tmp.rbegin(), tmp.rend());
-    for (int i = 0; i < tmp.size(); i++){
-       agents[tmp[i].second].rank = i + 1;
-    }
-}
-
-void ARCADE::update_advanced_gpu(){
-    string tmp = gpu;
-    tmp[agents[0].position] = '0';
-    advanced_gpu = gpu + "\n" + tmp;
-}
-
-//--------------------------------------------ACTIONS-----------------------------------------------
-
-void ACTION::apply(AGENT &agent, ARCADE &arcade){
+    //cout << action_map[action.action] << endl;
+    //TODO we should get a list of actions, and apply them each to each agent
+    AGENT& agent = agents[my_agent_id];
     if(agent.stun_timer > 0){
         //cerr << "agent stuned" << endl;
         return;
@@ -213,7 +170,7 @@ void ACTION::apply(AGENT &agent, ARCADE &arcade){
             break;
     }
     for(int i = 1; i <= steps && agent.position + i < 30; i++){
-        if(arcade.gpu[agent.position + i] == '#'){
+        if(gpu[agent.position + i] == '#'){
             agent.position += i;
             agent.stun_timer = 3;
 
@@ -221,70 +178,84 @@ void ACTION::apply(AGENT &agent, ARCADE &arcade){
         }
     }
     agent.position += steps;
+    update_ranks();
+
+    for(auto& agent : agents){
+        //cerr << "agent position == " << arcade.my_agent().position << endl;
+        //exit(0);
+        if(agent.second.position >= 30){
+            //someone reached the finish line
+            finish_game();
+            break;
+        }
+    }
+    update_advanced_gpu();
 }
 
+//ACTION ARCADE::best_action(AGENT &agent){
+//    set<int> hurdles;
+//    for(int i = 0; i < gpu.size(); i++){
+//        if(gpu[i] == '#'){
+//            hurdles.insert(i);
+//        }
+//    }
+//
+//    auto it = hurdles.upper_bound(agent.position);
+//
+//    ACTION action(RIGHT, my_agent());
+//    if(it  != hurdles.end()){
+//        if(*it - agent.position == 5 || *it - agent.position == 1 || *it - agent.position == 3)
+//            action.action = UP;
+//        else if(*it - agent.position > 3)
+//            action.action = RIGHT;
+//        else if(*it - agent.position == 2)
+//            action.action = RIGHT;
+//        else
+//            action.action = RIGHT;
+//    }
+//
+//    return action;
+//}
 
-void ACTION::print(){
-    cout << action_map[this->action] << endl;
+void ARCADE::update_ranks(){
+    vector<pair<int,int>> tmp;
+    for (auto & [fst, snd] : agents){
+       tmp.emplace_back(snd.position, snd.id);
+    }
+    sort(tmp.rbegin(), tmp.rend());
+    for (int i = 0; i < tmp.size(); i++){
+       agents[tmp[i].second].rank = i + 1;
+    }
 }
 
+void ARCADE::update_advanced_gpu(){
+    string tmp = gpu;
+    tmp[agents[0].position] = '0';
+    advanced_gpu = gpu + "\n" + tmp;
+}
 
 //--------------------------------------------TURN-----------------------------------------------
 
+GAME::GAME(int my_player_id, int nb_games): my_player_id(my_player_id){
 
-
-GAME::GAME(vector<ARCADE> arcades){
-    this->arcades = arcades;
+    vector<ARCADE> arcades;
+    arcades.reserve(nb_games);
+    for (int i = 0; i < nb_games; i++) {
+        arcades.emplace_back(this->my_player_id);
+    }
+    this->arcades = std::move(arcades);
+    for(int i = 0; i < arcades.size(); i++){
+        arcades[i].id = i;
+    }
     turn = 0;
 }
 
-void GAME::apply_action(ACTION action){
-    if(action.action == WAIT){
-        return;
-    }
+void GAME::apply_action(Action action){
     for(ARCADE& arcade : arcades){
-        if(arcade.game_over){
-            // TODO: we should start game
-            //arcade.start_game();
-            continue;
-        }
-        for(auto& agent : arcade.agents){
-            if(agent.second.stun_timer > 0){
-                agent.second.stun_timer--;
-            }
-        }
-        //cout << action_map[action.action] << endl;
-        action.apply(arcade.my_agent(), arcade);
-        arcade.update_ranks();
-
-        for(auto& agent : arcade.agents){
-            //cerr << "agent position == " << arcade.my_agent().position << endl;
-            //exit(0);
-            if(agent.second.position >= 30){
-                //someone reached the finish line
-                arcade.finish_game();
-                break;
-            }
-        }
-        arcade.update_advanced_gpu();
-        //cerr << "arcade id == " << arcade.id << endl;
-        //cerr << arcade.advanced_gpu;
-
+        arcade.apply_action(action);
     }
     turn++;
 }
-
-int GAME::arcade_perfect_score(int id){
-    GAME tmp = *this;
-    int res;
-    while(!tmp.arcades[id].game_over){
-        ACTION action = tmp.arcades[id].best_action(tmp.arcades[id].my_agent());
-        tmp.apply_action(action);
-        res++;
-    }
-    return res;
-}
-
 
 //--------------------------------------------  MONTE CARLO -----------------------------------------------
 
@@ -301,9 +272,9 @@ public:
     double totalScore;
 
     // Possible actions (4 actions as specified)
-    int actionTaken;
+    Action actionTaken;
 
-    MCTSNode(GAME* state, MCTSNode* parentNode = nullptr, int action = -1)
+    MCTSNode(GAME* state, MCTSNode* parentNode = nullptr, Action action = WAIT)
         : gameState(state), parent(parentNode), visits(0),
           totalScore(0), actionTaken(action) {}
 };
@@ -315,7 +286,7 @@ private:
     void (*freeState)(GAME*);
     bool (*isTerminal)(GAME*);
     double (*getScore)(GAME*);
-    GAME* (*takeAction)(GAME*, int);
+    GAME* (*takeAction)(GAME*, Action);
 
     // Random number generation
     std::mt19937 rng;
@@ -340,7 +311,8 @@ private:
     // Expansion phase: create child nodes
     MCTSNode* expand(MCTSNode* node) {
         // Try all 4 possible actions
-        for (int action = 0; action < 4; ++action) {
+        for (int i = 0; i < COUNT; ++i) {
+            auto action = static_cast<Action>(i);
             GAME* newState = takeAction(node->gameState, action);
             if (newState) {
                 auto childNode = std::make_unique<MCTSNode>(newState, node, action);
@@ -359,7 +331,7 @@ private:
 
         while (!isTerminal(simulationState) && depth < MAX_DEPTH) {
             // Randomly choose an action
-            int action = rng() % 4;
+            auto action = static_cast<Action>(rng() % 4);
             GAME* nextState = takeAction(simulationState, action);
 
             if (!nextState) continue;
@@ -417,7 +389,7 @@ public:
         void (*freeStateFunc)(GAME*),
         bool (*isTerminalFunc)(GAME*),
         double (*getScoreFunc)(GAME*),
-        GAME* (*takeActionFunc)(GAME*, int)
+        GAME* (*takeActionFunc)(GAME*, Action)
     ) :
         copyState(copyStateFunc),
         freeState(freeStateFunc),
@@ -428,7 +400,7 @@ public:
     {}
 
     // Main MCTS method to find the best action
-    int findBestAction(GAME* initialState) {
+    Action findBestAction(GAME* initialState) {
         // Create root node
         auto root = std::make_unique<MCTSNode>(copyState(initialState));
 
@@ -452,7 +424,7 @@ public:
 
         // Select the best child based on most visits
         MCTSNode* bestChild = selectBestChild(root.get());
-        int bestAction = bestChild ? bestChild->actionTaken : -1;
+        Action bestAction = bestChild ? bestChild->actionTaken : WAIT;
 
         return bestAction;
     }
@@ -497,7 +469,7 @@ GAME* takeAction(GAME* game, int actionIndex) {
     GAME* newGame = new GAME(*game);
 
     // Assuming you have 4 actions matching the actionIndex
-    ACTION action;
+    Action action = static_cast<Action>(actionIndex);
     // TODO: Map actionIndex to appropriate ACTION
     newGame->apply_action(action);
 
@@ -513,16 +485,7 @@ int main()
     cin >> nb_games; cin.ignore();
     cerr << nb_games << endl;
 
-    vector<ARCADE> arcades;
-    arcades.reserve(nb_games);
-    for (int i = 0; i < nb_games; i++) {
-        arcades.emplace_back(player_idx);
-    }
-    for(int i = 0; i < arcades.size(); i++){
-        arcades[i].id = i;
-    }
-
-    GAME game(arcades);
+    GAME game(player_idx, nb_games);
     // game loop
     while (1) {
         for (int i = 0; i < 3; i++) {
@@ -549,3 +512,4 @@ int main()
         // To debug: cerr << "Debug messages..." << endl;
     }
 }
+
