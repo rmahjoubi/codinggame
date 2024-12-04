@@ -464,12 +464,11 @@ double getScore(GAME* game) {
     return 1.0 / (game->turn + 1.0);
 }
 
-GAME* takeAction(GAME* game, int actionIndex) {
+GAME* takeAction(GAME* game, Action action) {
     // Create a copy of the game state
     GAME* newGame = new GAME(*game);
 
     // Assuming you have 4 actions matching the actionIndex
-    Action action = static_cast<Action>(actionIndex);
     // TODO: Map actionIndex to appropriate ACTION
     newGame->apply_action(action);
 
@@ -478,6 +477,14 @@ GAME* takeAction(GAME* game, int actionIndex) {
 
 int main()
 {
+    MonteCarloTreeSearch mcts(
+        copyState,
+        freeState,
+        isTerminal,
+        getScore,
+        takeAction
+    );
+
     int player_idx;
     cin >> player_idx; cin.ignore();
     cerr << player_idx << endl;
@@ -506,6 +513,9 @@ int main()
             cerr << gpu << " " << reg_0 << " " << reg_1 << " " << reg_2 << " " << reg_3 << " " << reg_4 << " " << reg_5 << " " << reg_6 << endl;
             game.arcades[i].update({{"reg0",reg_0},{"reg1", reg_1},{"reg2", reg_2},{"reg3", reg_3},{"reg4", reg_4},{"reg5", reg_5},{"reg6", reg_6}}, gpu);
         }
+
+        Action best = mcts.findBestAction(&game);
+        cout << action_map[best];
         //break;
 
         // Write an action using cout. DON'T FORGET THE "<< endl"
