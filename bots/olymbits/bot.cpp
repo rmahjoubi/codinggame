@@ -35,7 +35,8 @@ public:
     //TODO: are we sure we have four arcades;
     map<int, pair<int,int>> current_elo;
 
-    explicit GAME(int my_player_id, int nb_games);
+    GAME(int my_player_id, int nb_games);
+    GAME(const GAME *game);
     void apply_action(Action action);
 };
 
@@ -60,6 +61,7 @@ public:
     map<int, AGENT> agents{};
 
     explicit ARCADE(int my_agent_id);
+    ARCADE(const ARCADE &arcade);
     AGENT& get_agent(int id);
     //ACTION best_action(AGENT &agent);
     void start_game();
@@ -86,6 +88,22 @@ ARCADE::ARCADE(int my_agent_id) : my_agent_id(my_agent_id) {
     agents[0].id = 0;
     agents[1].id = 1;
     agents[2].id = 2;
+}
+
+ARCADE::ARCADE(const ARCADE &arcade)
+    : id(arcade.id),
+      gpu(arcade.gpu),
+      advanced_gpu(arcade.advanced_gpu),
+      game_over(arcade.game_over),
+      reg0(arcade.reg0), reg1(arcade.reg1), reg2(arcade.reg2),
+      reg3(arcade.reg3), reg4(arcade.reg4), reg5(arcade.reg5),
+      reg6(arcade.reg6),
+      my_agent_id(arcade.my_agent_id),
+      restarting(arcade.restarting) {
+    // Deep copy of the agents map
+    for (const auto& [id, agent] : arcade.agents) {
+        agents[id] = agent;  // Make sure each AGENT is copied properly
+    }
 }
 
 AGENT& ARCADE::my_agent(){
@@ -250,6 +268,16 @@ GAME::GAME(int my_player_id, int nb_games): my_player_id(my_player_id){
     turn = 0;
 }
 
+GAME::GAME(const GAME *game)
+    : turn(game->turn),
+      my_player_id(game->my_player_id),
+      current_elo(game->current_elo) {
+    // Deep copy of the vector of ARCADE objects
+    for (const auto &arcade : game->arcades) {
+        arcades.emplace_back(arcade);  // Deep copy of each ARCADE
+    }
+}
+
 void GAME::apply_action(Action action){
     for(ARCADE& arcade : arcades){
         arcade.apply_action(action);
@@ -337,7 +365,7 @@ private:
             if (!nextState) continue;
 
             // Free previous state to prevent memory leak
-            freeState(simulationState);
+            // freeState(simulationState);
             simulationState = nextState;
 
             depth++;
@@ -345,7 +373,7 @@ private:
 
         // Get the score based on game completion
         double score = getScore(simulationState);
-        freeState(simulationState);
+        // freeState(simulationState);
 
         return score;
     }
@@ -419,7 +447,7 @@ public:
             backpropagate(selectedNode, score);
 
             // Free the iteration state
-            freeState(iterationState);
+            // freeState(iterationState);
         }
 
         // Select the best child based on most visits
@@ -516,6 +544,7 @@ int main()
 
         Action best = mcts.findBestAction(&game);
         cout << action_map[best];
+        return 0;
         //break;
 
         // Write an action using cout. DON'T FORGET THE "<< endl"
