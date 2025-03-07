@@ -72,11 +72,14 @@ public:
 	unordered_set<int> spells{};
 	vector<ACTION> potions;
 	int last_action_id{-2};
+    deque<ACTION> possible_actions{};
+
 	//methods
 	GAME(unordered_set<int> spells, vector<ACTION> potions, INV inv, TOME tome, int turn_count);
 	GAME(const GAME& other);
+    void update_possible_actions();
 	bool can_action(int id) const;
-	void perform_action(ACTION& a);
+	void perform_action(const ACTION& a);
 	bool is_terminal() const override;
 	MCTS_state* next_state(const MCTS_move* move) const override;
 	queue<MCTS_move*>* actions_to_try() const override;
@@ -115,6 +118,7 @@ public:
 GAME::GAME(unordered_set<int> spells, vector<ACTION> potions, INV inv, TOME tome, int turn_count) : spells(spells), potions(potions), turn_count(turn_count),
 	inv(inv), tome(tome)
 {
+    update_possible_actions();
 }
 
 GAME::GAME(const GAME& other) : spells(other.spells), potions(other.potions), inv(other.inv), tome(other.tome),
@@ -175,42 +179,35 @@ double GAME::rollout() const
 	const int max_reward = 23 * 100;
 	if (is_terminal()) return static_cast<double>(inv.score) / max_reward;
 
-	deque<ACTION> available;
-	for (auto s : tome.spells)
-		if (can_action(s.action_id))
-			available.push_front(s);
-	for (auto p : potions)
-		if (can_action(p.action_id))
-			available.push_front(p);
-	for (int s : spells)
-		if (can_action(s))
-			available.push_front(actions_pool[s]);
-	available.push_front(actions_pool[-1]);
-
 	long long r;
-	ACTION a;
-	GAME *curstate = (GAME*) this;
+    ACTION a;
+    GAME a_game(*this);
 	srand(time(NULL));
-	bool first = true;
-	do
-	{
-		if (available.empty())
+    do{
+        if (a_game.possible_actions.empty())
 		{
 			throw runtime_error("run out of available moves and state is not terminal?.");
-		}
-		r = rand() % available.size();
-		a = available[r];
-		available.erase(available.begin() + r);
-		GAME* old = curstate;
-		curstate = (GAME*) curstate->next_state(&a);
-		if (!first)
-			delete old;
-		first = false;
-	} while (!curstate->is_terminal());
+	    } 
+		r = rand() % a_game.possible_actions.size();
+        const ACTION& a = possible_actions[r];
+        a_game.perform_action(a);
+    } while(!is_terminal());
 
-	double res = curstate->inv.score / max_reward;
-	delete curstate;
-	return res;
+	double res = a_game.inv.score / max_reward;
+    return res;
+}
+
+void GAME::update_possible_actions(){
+    for (auto s : tome.spells)
+	    if (can_action(s.action_id))
+			possible_actions.push_front(s);
+	for (auto p : potions)
+		if (can_action(p.action_id))
+			possible_actions.push_front(p);
+	for (int s : spells)
+		if (can_action(s))
+			possible_actions.push_front(actions_pool[s]);
+	possible_actions.push_front(actions_pool[-1]);
 }
 
 bool GAME::can_action(int id) const
@@ -243,7 +240,7 @@ bool GAME::can_action(int id) const
 }
 
 
-void GAME::perform_action(ACTION& a)
+void GAME::perform_action(const ACTION& a)
 {
 	if (!can_action(a.action_id))
 		throw runtime_error("Action cannot be performed due to invalid conditions.");
@@ -340,6 +337,8 @@ void GAME::perform_action(ACTION& a)
 	case WAIT:
 		cerr << "whiy did you wait rest instead" << endl;
 	}
+
+    update_possible_actions();
 	//cout << inv.inv_0 << " " << inv.inv_1 << " " << inv.inv_2 << " " << inv.inv_3 << endl;
 }
 
