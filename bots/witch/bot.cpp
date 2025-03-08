@@ -78,7 +78,7 @@ public:
 	GAME(unordered_set<int> spells, vector<ACTION> potions, INV inv, TOME tome, int turn_count);
 	GAME(const GAME& other);
     void update_possible_actions();
-	bool can_action(int id) const;
+	bool can_action(const ACTION& a) const;
 	void perform_action(const ACTION& a);
 	bool is_terminal() const override;
 	MCTS_state* next_state(const MCTS_move* move) const override;
@@ -122,20 +122,20 @@ GAME::GAME(unordered_set<int> spells, vector<ACTION> potions, INV inv, TOME tome
 }
 
 GAME::GAME(const GAME& other) : spells(other.spells), potions(other.potions), inv(other.inv), tome(other.tome),
-                                turn_count(other.turn_count)
+                                turn_count(other.turn_count), possible_actions(other.possible_actions)
 {
 }
 
 bool GAME::is_terminal() const
 {
-	return turn_count >= 100;
+	return turn_count >= 100 || potions.empty();
 }
 
 MCTS_state* GAME::next_state(const MCTS_move* move) const
 {
 	ACTION *m = (ACTION*) move;
 	GAME *new_state = new GAME(*this);
-	if (can_action(m->action_id))
+	if (can_action(*m))
 	{
 		new_state->perform_action(*m);
 	}
@@ -149,34 +149,16 @@ MCTS_state* GAME::next_state(const MCTS_move* move) const
 queue<MCTS_move*>* GAME::actions_to_try() const
 {
 	queue<MCTS_move*>* Q = new queue<MCTS_move*>();
-	for (auto& s : tome.spells)
+	for (auto& action : possible_actions)
 	{
-		if (can_action(s.action_id))
-		{
-			Q->push(new ACTION(s));
-		}
+		Q->push(new ACTION(action));
 	}
-	for (auto& p : potions)
-	{
-		if (can_action(p.action_id))
-		{
-			Q->push(new ACTION(p));
-		}
-	}
-	for (int s : spells)
-	{
-		if (can_action(s))
-		{
-			Q->push(new ACTION(actions_pool[s]));
-		}
-	}
-	Q->push(new ACTION(actions_pool[-1]));
 	return Q;
 }
 
 double GAME::rollout() const
 {
-	const int max_reward = 23 * 100;
+	const int max_reward = 100;
 	if (is_terminal()) return static_cast<double>(inv.score) / max_reward;
 
 	long long r;
@@ -189,30 +171,48 @@ double GAME::rollout() const
 			throw runtime_error("run out of available moves and state is not terminal?.");
 	    } 
 		r = rand() % a_game.possible_actions.size();
-        const ACTION& a = possible_actions[r];
+        const ACTION& a = a_game.possible_actions[r];
         a_game.perform_action(a);
-    } while(!is_terminal());
+    } while(!a_game.is_terminal());
 
-	double res = a_game.inv.score / max_reward;
+	double res = double(a_game.inv.score) / max_reward - double(a_game.turn_count) / (2 * max_reward);
+	if (res < 0) res = double(a_game.inv.score) / (max_reward * 1000);
+	if (res > 1) res = 1;
     return res;
 }
 
 void GAME::update_possible_actions(){
+	possible_actions.clear();
+	for (auto p : potions)
+		if (can_action(p))
+			possible_actions.push_front(p);
+	if (!possible_actions.empty())
+	{
+		ACTION& a = possible_actions.front();
+		for (auto& p : possible_actions)
+		{
+			if (p.price > a.price)
+				a = p;
+		}
+		possible_actions.clear();
+		possible_actions.push_front(a);
+		return;
+	}
     for (auto s : tome.spells)
-	    if (can_action(s.action_id))
+	    if (can_action(s))
 			possible_actions.push_front(s);
 	for (auto p : potions)
-		if (can_action(p.action_id))
+		if (can_action(p))
 			possible_actions.push_front(p);
 	for (int s : spells)
-		if (can_action(s))
+		if (can_action(actions_pool[s]))
 			possible_actions.push_front(actions_pool[s]);
-	possible_actions.push_front(actions_pool[-1]);
+	if (can_action(actions_pool[-1]))
+		possible_actions.push_front(actions_pool[-1]);
 }
 
-bool GAME::can_action(int id) const
+bool GAME::can_action(const ACTION& a) const
 {
-	ACTION& a = actions_pool[id];
 	switch (a.action_type)
 	{
 	case BREW:
@@ -242,7 +242,7 @@ bool GAME::can_action(int id) const
 
 void GAME::perform_action(const ACTION& a)
 {
-	if (!can_action(a.action_id))
+	if (!can_action(a))
 		throw runtime_error("Action cannot be performed due to invalid conditions.");
 	last_action_id = a.action_id;
 	int pos = -1;
@@ -324,7 +324,10 @@ void GAME::perform_action(const ACTION& a)
 			throw runtime_error("spell doesn't exist in tome_spells.");
 		tome.spells.erase(tome.spells.begin() + pos);
 		for (int i = 0; i < tome.spells.size(); i++)
+		{
 			tome.spells[i].tome_index = i;
+			actions_pool[tome.spells[i].action_id].tome_index = i;
+		}
 		spells.insert(a.action_id);
 		spells_ids.insert(a.action_id);
 		actions_pool[a.action_id].s_action_type = "CAST";
@@ -336,9 +339,11 @@ void GAME::perform_action(const ACTION& a)
 		break;
 	case WAIT:
 		cerr << "whiy did you wait rest instead" << endl;
+		break;
 	}
 
     update_possible_actions();
+	turn_count++;
 	//cout << inv.inv_0 << " " << inv.inv_1 << " " << inv.inv_2 << " " << inv.inv_3 << endl;
 }
 
@@ -400,86 +405,86 @@ int get_action(map<vector<int>, vector<int>>& par, vector<int> final_action)
 		return -1;
 }
 
-ACTION bfs(GAME game)
-{
-	map<vector<int>, vector<int>> par;
-	queue<GAME> q;
-	q.push(game);
-	map<vector<int>, bool> visited;
-	visited[game.inv.state] = true;
-	int current_score = game.inv.score;
-	while (!q.empty())
-	{
-		GAME g = q.front();
-		q.pop();
-		for (int s : g.spells)
-		{
-			if (g.can_action(s))
-			{
-				GAME new_game = g;
-				new_game.perform_action(actions_pool[s]);
-				if (!visited[new_game.inv.state])
-				{
-					q.push(new_game);
-					par[{
-						new_game.inv.inv_0, new_game.inv.inv_1, new_game.inv.inv_2, new_game.inv.inv_3,
-						new_game.inv.score, new_game.last_action_id
-					}] = {g.inv.inv_0, g.inv.inv_1, g.inv.inv_2, g.inv.inv_3, g.inv.score, g.last_action_id};
-					visited[new_game.inv.state] = true;
-				}
-			}
-		}
-		for (ACTION p : g.potions)
-		{
-			if (g.can_action(p.action_id))
-			{
-				GAME new_game = g;
-				new_game.perform_action(p);
-				par[{
-					new_game.inv.inv_0, new_game.inv.inv_1, new_game.inv.inv_2, new_game.inv.inv_3, new_game.inv.score,
-					new_game.last_action_id
-				}] = {g.inv.inv_0, g.inv.inv_1, g.inv.inv_2, g.inv.inv_3, g.inv.score, g.last_action_id};
-				int id = get_action(par, {
-					                    new_game.inv.inv_0, new_game.inv.inv_1, new_game.inv.inv_2, new_game.inv.inv_3,
-					                    new_game.inv.score, new_game.last_action_id
-				                    });
-				cerr << "brewing id:" << actions_pool[id].s_action_type << "id==" << id << endl;
-				return actions_pool[id];
-			}
-		}
-		if (g.spells.size() < spells_ids.size())
-		{
-			GAME new_game = g;
-			new_game.perform_action(actions_pool[-1]);
-			q.push(new_game);
-			par[{
-				new_game.inv.inv_0, new_game.inv.inv_1, new_game.inv.inv_2, new_game.inv.inv_3, new_game.inv.score,
-				new_game.last_action_id
-			}] = {g.inv.inv_0, g.inv.inv_1, g.inv.inv_2, g.inv.inv_3, g.inv.score, g.last_action_id};
-			visited[new_game.inv.state] = true;
-		}
-		for (ACTION s : g.tome.spells)
-		{
-			if (g.can_action(s.action_id))
-			{
-				GAME new_game = g;
-				new_game.perform_action(actions_pool[s.action_id]);
-				if (!visited[new_game.inv.state])
-				{
-					q.push(new_game);
-					par[{
-						new_game.inv.inv_0, new_game.inv.inv_1, new_game.inv.inv_2, new_game.inv.inv_3,
-						new_game.inv.score, new_game.last_action_id
-					}] = {g.inv.inv_0, g.inv.inv_1, g.inv.inv_2, g.inv.inv_3, g.inv.score, g.last_action_id};
-					visited[new_game.inv.state] = true;
-				}
-			}
-		}
-	}
-	cerr << "exiting with res" << endl;
-	ACTION action;
-	return action;
-}
+//ACTION bfs(GAME game)
+//{
+//	map<vector<int>, vector<int>> par;
+//	queue<GAME> q;
+//	q.push(game);
+//	map<vector<int>, bool> visited;
+//	visited[game.inv.state] = true;
+//	int current_score = game.inv.score;
+//	while (!q.empty())
+//	{
+//		GAME g = q.front();
+//		q.pop();
+//		for (int s : g.spells)
+//		{
+//			if (g.can_action(s))
+//			{
+//				GAME new_game = g;
+//				new_game.perform_action(actions_pool[s]);
+//				if (!visited[new_game.inv.state])
+//				{
+//					q.push(new_game);
+//					par[{
+//						new_game.inv.inv_0, new_game.inv.inv_1, new_game.inv.inv_2, new_game.inv.inv_3,
+//						new_game.inv.score, new_game.last_action_id
+//					}] = {g.inv.inv_0, g.inv.inv_1, g.inv.inv_2, g.inv.inv_3, g.inv.score, g.last_action_id};
+//					visited[new_game.inv.state] = true;
+//				}
+//			}
+//		}
+//		for (ACTION p : g.potions)
+//		{
+//			if (g.can_action(p.action_id))
+//			{
+//				GAME new_game = g;
+//				new_game.perform_action(p);
+//				par[{
+//					new_game.inv.inv_0, new_game.inv.inv_1, new_game.inv.inv_2, new_game.inv.inv_3, new_game.inv.score,
+//					new_game.last_action_id
+//				}] = {g.inv.inv_0, g.inv.inv_1, g.inv.inv_2, g.inv.inv_3, g.inv.score, g.last_action_id};
+//				int id = get_action(par, {
+//					                    new_game.inv.inv_0, new_game.inv.inv_1, new_game.inv.inv_2, new_game.inv.inv_3,
+//					                    new_game.inv.score, new_game.last_action_id
+//				                    });
+//				cerr << "brewing id:" << actions_pool[id].s_action_type << "id==" << id << endl;
+//				return actions_pool[id];
+//			}
+//		}
+//		if (g.spells.size() < spells_ids.size())
+//		{
+//			GAME new_game = g;
+//			new_game.perform_action(actions_pool[-1]);
+//			q.push(new_game);
+//			par[{
+//				new_game.inv.inv_0, new_game.inv.inv_1, new_game.inv.inv_2, new_game.inv.inv_3, new_game.inv.score,
+//				new_game.last_action_id
+//			}] = {g.inv.inv_0, g.inv.inv_1, g.inv.inv_2, g.inv.inv_3, g.inv.score, g.last_action_id};
+//			visited[new_game.inv.state] = true;
+//		}
+//		for (ACTION s : g.tome.spells)
+//		{
+//			if (g.can_action(s.action_id))
+//			{
+//				GAME new_game = g;
+//				new_game.perform_action(actions_pool[s.action_id]);
+//				if (!visited[new_game.inv.state])
+//				{
+//					q.push(new_game);
+//					par[{
+//						new_game.inv.inv_0, new_game.inv.inv_1, new_game.inv.inv_2, new_game.inv.inv_3,
+//						new_game.inv.score, new_game.last_action_id
+//					}] = {g.inv.inv_0, g.inv.inv_1, g.inv.inv_2, g.inv.inv_3, g.inv.score, g.last_action_id};
+//					visited[new_game.inv.state] = true;
+//				}
+//			}
+//		}
+//	}
+//	cerr << "exiting with res" << endl;
+//	ACTION action;
+//	return action;
+//}
 
 //--------------------------------------------------------------------------
 
@@ -488,7 +493,7 @@ int main()
 	//cout << "Hello World!" << endl;
 	// game loop
 	int turn = 0;
-	int max_iter = 1000;
+	int max_iter = 100000;
 	int max_seconds = 3;
 
 	while (1)
@@ -579,5 +584,6 @@ int main()
 		else
 			cout << res->s_action_type << " " << res->action_id << endl;
 		turn++;
+		return 0;
 	}
 }
