@@ -50,7 +50,7 @@ public:
 	// methods
 	INV() = default;
 	INV(int inv_0, int inv_1, int inv_2, int inv_3, int score);
-	bool is_full();
+	int space_left_for(const ACTION& spell) const;
 };
 
 class TOME
@@ -165,18 +165,24 @@ double GAME::rollout() const
     ACTION a;
     GAME a_game(*this);
 	srand(time(NULL));
+	int tmp = 0;
+	int last_brew= 1;
     do{
         if (a_game.possible_actions.empty())
 		{
+        	return 0;
 			throw runtime_error("run out of available moves and state is not terminal?.");
 	    } 
 		r = rand() % a_game.possible_actions.size();
         const ACTION& a = a_game.possible_actions[r];
         a_game.perform_action(a);
-    } while(!a_game.is_terminal());
+    	tmp++;
+    	last_brew = a.action_type==BREW ? tmp : last_brew;
+    } while(tmp <= 20 && !a_game.is_terminal());
 
-	double res = double(a_game.inv.score) / max_reward - double(a_game.turn_count) / (2 * max_reward);
-	if (res < 0) res = double(a_game.inv.score) / (max_reward * 1000);
+	//double res = double(a_game.inv.score) / max_reward - double(a_game.turn_count) / (2 * max_reward);
+	double res = double(a_game.inv.score - this->inv.score) / 20 + 1.0 / (last_brew * 10);
+	//if (res < 0) res = double(a_game.inv.score) / (max_reward * 1000);
 	if (res > 1) res = 1;
     return res;
 }
@@ -221,7 +227,7 @@ bool GAME::can_action(const ACTION& a) const
 			return true;
 		break;
 	case CAST:
-		if (inv.inv_0 >= -a.delta_0 && inv.inv_1 >= -a.delta_1 && inv.inv_2 >= -a.delta_2 && inv.inv_3 >= -a.delta_3)
+		if (inv.space_left_for(a) && inv.inv_0 >= -a.delta_0 && inv.inv_1 >= -a.delta_1 && inv.inv_2 >= -a.delta_2 && inv.inv_3 >= -a.delta_3)
 			return true;
 		break;
 	case LEARN:
@@ -354,12 +360,11 @@ INV::INV(int inv_0, int inv_1, int inv_2, int inv_3, int score) : inv_0(inv_0), 
 {
 }
 
-bool INV::is_full()
+int INV::space_left_for(const ACTION& spell) const
 {
-	if (inv_0 >= 0 + inv_1 >= 0 + inv_2 >= 0 + inv_3 >= 10)
+	if (spell.delta_0 + spell.delta_1 + spell.delta_2 + spell.delta_3 + inv_0 + inv_1 + inv_2 + inv_3 <= 10)
 		return true;
-	else
-		return false;
+	return false;
 }
 
 //----------------------------ACTIONS METHODS ---------------------------------
@@ -493,8 +498,8 @@ int main()
 	//cout << "Hello World!" << endl;
 	// game loop
 	int turn = 0;
-	int max_iter = 100000;
-	int max_seconds = 3;
+	int max_iter = 1000000;
+	int max_seconds = 60;
 
 	while (1)
 	{
