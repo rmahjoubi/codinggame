@@ -8,10 +8,6 @@
 #include <ctime>
 
 
-#include "MonteCarloTreeSearch/mcts/include/state.h"
-#include "MonteCarloTreeSearch/mcts/include/mcts.h"
-
-
 using namespace std;
 
 /**
@@ -63,7 +59,7 @@ public:
 	};
 };
 
-class GAME : public MCTS_state
+class GAME
 {
 public:
 	int turn_count{};
@@ -80,14 +76,12 @@ public:
     void update_possible_actions();
 	bool can_action(const ACTION& a) const;
 	void perform_action(const ACTION& a);
-	bool is_terminal() const override;
-	MCTS_state* next_state(const MCTS_move* move) const override;
-	queue<MCTS_move*>* actions_to_try() const override;
-	double rollout() const override;
-	bool player1_turn() const override {return true;}
+	bool is_terminal() const;
+	double rollout() const;
+    vector<int> get_state();
 };
 
-class ACTION : public MCTS_move
+class ACTION
 {
 public:
 	int action_id{}; // the unique ID of this spell or recipe
@@ -105,13 +99,14 @@ public:
 	bool castable{}; // in the first league: always 0; later: 1 if this is a castable player spell
 	bool repeatable{}; // for the first two leagues: always 0; later: 1 if this is a repeatable player spell
 	int urgency{};
+    int score{-1000};
 
 	ACTION(): action_id(-1), action_type(REST), s_action_type("REST")
 	{
 	};
+    ACTION(Action action_type): action_type(action_type){};
 	ACTION(int action_id, const string& s_action_type, int delta_0, int delta_1, int delta_2, int delta_3,
 	       int price, int tome_index, bool castable, bool repeatable);
-	bool operator==(const MCTS_move& other) const;
 };
 
 //----------------------------GAME METHODS ---------------------------------
@@ -131,30 +126,6 @@ bool GAME::is_terminal() const
 	return turn_count >= 100 || potions.empty();
 }
 
-MCTS_state* GAME::next_state(const MCTS_move* move) const
-{
-	ACTION *m = (ACTION*) move;
-	GAME *new_state = new GAME(*this);
-	if (can_action(*m))
-	{
-		new_state->perform_action(*m);
-	}
-	else
-	{
-		throw runtime_error("Action cannot be performed due to invalid conditions.");
-	}
-	return new_state;
-}
-
-queue<MCTS_move*>* GAME::actions_to_try() const
-{
-	queue<MCTS_move*>* Q = new queue<MCTS_move*>();
-	for (auto& action : possible_actions)
-	{
-		Q->push(new ACTION(action));
-	}
-	return Q;
-}
 
 double GAME::rollout() const
 {
@@ -347,6 +318,19 @@ void GAME::perform_action(const ACTION& a)
 	//cout << inv.inv_0 << " " << inv.inv_1 << " " << inv.inv_2 << " " << inv.inv_3 << endl;
 }
 
+vector<int> GAME::get_state(){
+    vector<int> state = {inv.inv_0, inv.inv_1, inv.inv_2, inv.inv_3, inv.score};
+    set<int> to_learn;
+    for (auto& s : tome.spells){
+        to_learn.insert(s.action_id);
+    }
+
+    for(auto el : to_learn){
+        state.push_back(el);
+    }
+    return state;
+}
+
 //----------------------------INV METHODS ---------------------------------
 INV::INV(int inv_0, int inv_1, int inv_2, int inv_3, int score) : inv_0(inv_0), inv_1(inv_1), inv_2(inv_2),
                                                                   inv_3(inv_3), score(score),
@@ -379,13 +363,6 @@ ACTION::ACTION(int action_id, const string& s_action_type, int delta_0, int delt
 {
 	action_type = action_map[s_action_type];
 }
-
-bool ACTION::operator==(const MCTS_move& other) const
-{
-	const ACTION &m = (const ACTION&) other;
-	return action_id == m.action_id;
-}
-
 
 //-----------------------------------bfs------------------------------------
 
@@ -488,6 +465,66 @@ int get_action(map<vector<int>, vector<int>>& par, vector<int> final_action)
 
 //--------------------------------------------------------------------------
 
+void DLS(GAME& game, int limit, int depth_decrease, int max_ms) 
+{ 
+    // If reached the maximum depth, stop recursing. 
+    time_t start_t, now_t;
+    time(&start_t);
+    map<vector<int>, bool> visited;
+    if (limit <= 0 || game.is_terminal()) 
+        return; 
+  
+    // Recur for all the vertices adjacent to source vertex 
+    //for (auto i = adj[src].begin(); i != adj[src].end(); ++i)
+    for (ACTION& action : game.possible_actions){
+        GAME new_game = GAME(game);
+        new_game.perform_action(action);
+        action.score = (game.inv.score - new_game.inv.score) - 1;
+		if (!visited[new_game.get_state()]){
+            visited[new_game.get_state()] = true;
+            double elapsed_ms = difftime(now_t, start_t) * 1000;
+            time(&now_t);
+            if(elapsed_ms >= max_ms)
+                return;
+            DLS(new_game, limit - depth_decrease, depth_decrease, max_ms);
+            int top_score = -1000;
+            for(ACTION& a: new_game.possible_actions){
+                top_score = max(action.score, top_score);
+            }
+            action.score += top_score;
+        }
+    }
+} 
+
+ACTION IDDFS(GAME& game, int max_depth, int max_ms) 
+{ 
+    // Repeatedly depth-limit search till the 
+    // maximum depth. 
+    ACTION action = ACTION(WAIT);
+    time_t start_t, now_t;
+    time(&start_t);
+    for (int i = 0; i <= max_depth; i += 4){
+        time(&now_t);
+        double elapsed_ms = difftime(now_t, start_t) * 1000;
+        if(elapsed_ms >= max_ms){
+            cerr << "exiting before reaching max depth" << endl;
+            break;
+        }
+        DLS(game, max_depth, 6, max_ms);
+    }
+    for (ACTION& a : game.possible_actions){
+        if(a.score >= action.score)
+            action = a;
+    }
+    time(&now_t);
+    cerr << "top_score == " << action.score << " time == " << difftime(now_t, start_t)<< endl;
+    return action;
+} 
+
+//--------------------------------------------------------------------------
+
+
+
 int main()
 {
 	//cout << "Hello World!" << endl;
@@ -559,30 +596,16 @@ int main()
 			INV inv(inv_0, inv_1, inv_2, inv_3, score);
 			invs.push_back(inv);
 		}
-		//GAME game(spells, potions, invs[0], tome);
-		MCTS_state *state = new GAME(spells, potions, invs[0], tome, turn);
-		MCTS_tree* tree = new MCTS_tree(state);
-		tree->grow_tree(max_iter, max_seconds);
-		MCTS_node *best_child = tree->select_best_child();
-		if (best_child == NULL)
-			throw runtime_error("No best child found from main.");
-		const MCTS_move *best_move = best_child->get_move();
-		const ACTION *res = dynamic_cast<const ACTION *>(best_move);
+		GAME game(spells, potions, invs[0], tome, turn);
 
-		if (!res)
-		{
-			throw runtime_error("Best move is not an action.");
-		}
 
-		//MCTS_agent agent(state, 1000, 2);
-
-		//ACTION res = bfs(game);
+		ACTION res = IDDFS(game, 30, 5000);
 
 		// in the first league: BREW <id> | WAIT; later: BREW <id> | CAST <id> [<times>] | LEARN <id> | REST | WAIT
-		if (res->action_type == REST)
+		if (res.action_type == REST)
 			cout << "REST" << endl;
 		else
-			cout << res->s_action_type << " " << res->action_id << endl;
+			cout << res.s_action_type << " " << res.action_id << endl;
 		turn++;
 		return 0;
 	}
