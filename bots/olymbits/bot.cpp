@@ -13,7 +13,7 @@
 #include <ctime>
 #include <algorithm>
 #include <chrono>
-#define DEBUG
+//#define DEBUG
 
 
 using namespace std;
@@ -62,7 +62,7 @@ public:
 #include <iomanip>
 
 
-#define STARTING_NUMBER_OF_CHILDREN 32   // expected number so that we can preallocate this many pointers
+#define STARTING_NUMBER_OF_CHILDREN 4   // expected number so that we can preallocate this many pointers
 #define PARALLEL_ROLLOUTS                // whether or not to do multiple parallel rollouts
 
 
@@ -505,11 +505,22 @@ public:
     void next(ACTION action);
     int f_maximal_traversed();
     int arcade_perfect_score(int id);
-    bool is_terminal() const override; 
+    bool is_terminal() const override;
     MCTS_state* next_state(const MCTS_move* move) const override;
     queue<MCTS_move*>* actions_to_try() const override;
     double rollout() const override;
     bool player1_turn() const override {return true;}
+};
+
+class ACTION : public MCTS_move{
+public:
+    Action action{};
+
+    ACTION(){};
+    ACTION(Action action){this->action = action;}
+    void print();
+    void apply(AGENT& agent, ARCADE& arcade);
+    bool operator==(const MCTS_move& other) const;
 };
 
 
@@ -525,6 +536,7 @@ public:
     int reg4{};
     int reg5{};
     int reg6{};
+    vector<pair<int,int>> aagents{};
     int my_agent_id{};
     int my_traversed{};
     bool restarting{};
@@ -535,11 +547,138 @@ public:
     AGENT& get_agent(int id);
     ACTION best_action(AGENT &agent);
     void restart();
-    void update_rank();
-    void update_advanced_gpu();
-    void execute(ACTION action);
+    virtual void update_rank();
+    virtual void update_advanced_gpu();
+    virtual void apply_action(ACTION& action, int agent_id);
     AGENT& my_agent();
 };
+
+class HURDLE : public ARCADE{
+    int traversed{};
+    
+    void update_advanced_gpu() override;
+    void update_rank() override;
+    void apply_action(ACTION& action, int agent_id) override;
+};
+
+void HURDLE::apply_action(ACTION& action, int agent_id){
+    pair<int, int> agent = aagents[agent_id];
+    if(agent.second > 0){
+        //cerr << "agent stuned" << endl;
+        agent.second--;
+        return;
+    }
+    int steps = 0;
+    switch(action.action){
+        case WAIT:
+            return;
+        case LEFT:
+            steps = 1;
+            break;
+        case UP:
+            steps = 2;
+            agent.first += steps;
+            traversed += steps;
+            if (gpu[agent.first] == '#')
+            {
+                agent.second = 3;
+            }
+            return;
+        case RIGHT:
+            steps = 3;
+            break;
+        case DOWN:
+            steps = 2;
+            break;
+    }
+    for(int i = 1; i <= steps && agent.first + i < 30; i++){
+        if(gpu[agent.first + i] == '#'){
+            agent.first += i;
+            traversed += i;
+            agent.second = 3;
+
+            return;
+        }
+    }
+    agent.first += steps;
+    traversed += steps;
+}
+
+class  ARCHERY: public ARCADE{
+    deque<int> wind{};
+
+    void update_advanced_gpu() override;
+    void update_rank() override;
+    void apply_action(ACTION& action, int agent_id) override;
+};
+
+void ARCHERY::apply_action(ACTION& action, int agent_id){
+    pair<int, int> agent = aagents[agent_id];
+    switch(action.action){
+        case WAIT:
+            return;
+        case LEFT:
+            agent.first -= wind.front();
+            wind.pop_front();
+            break;
+        case UP:
+            agent.second += wind.front();
+            wind.pop_front();
+            break;
+        case RIGHT:
+            agent.first += wind.front();
+            wind.pop_front();
+            break;
+        case DOWN:
+            agent.second -= wind.front();
+            wind.pop_front();
+            break;
+    }
+}
+
+class ROLLER: public ARCADE{
+    map<Action, pair<int,int>> effects{};
+    void update_advanced_gpu() override;
+    void update_rank() override;
+    void apply_action(ACTION& action, int agent_id) override;
+};
+
+void ROLLER::apply_action(ACTION& action, int agent_id){
+    pair<int, int> agent = aagents[agent_id];
+    if (agent.second < 0){
+        agent.second++;
+        return;
+    }
+    agent.first += effects[action.action].first;
+    agent.second += effects[action.action].second;
+    //TODO : if two agents in the same space
+}
+
+class DIVING: public ARCADE{
+    deque<Action> expected;
+    void update_advanced_gpu() override;
+    void update_rank() override;
+    void apply_action(ACTION& action, int agent_id) override;
+};
+
+
+void DIVING::apply_action(ACTION& action, int agent_id){
+    pair<int, int> agent = aagents[agent_id];
+    if (agent.second < 0){
+        agent.second++;
+        return;
+    }
+    if(action.action == expected.front()){
+        agent.first++;
+    }
+    else{
+        agent.first = 0;
+    }
+    expected.pop_front();
+}
+
+
+
 
 class AGENT{
 public:
@@ -550,23 +689,18 @@ public:
     AGENT(){}
 };
 
-class ACTION : public MCTS_move{
-public:
-    Action action{};
-
-    ACTION(){};
-    ACTION(Action action){this->action = action;}
-    void print();
-    void apply(AGENT& agent, ARCADE& arcade);
-    bool operator==(const MCTS_move& other) const;
-};
 
 //--------------------------------------------ARCADE-----------------------------------------------
 
 ARCADE::ARCADE(int my_agent_id, map<string, int> regs, string gpu, int id, int my_traversed) : my_agent_id(my_agent_id), gpu(gpu), id(id), my_traversed(my_traversed){
+
     agents[0].id = 0;
     agents[1].id = 1;
     agents[2].id = 2;
+    if(gpu == "GAME_OVER"){
+        restart();
+        return;
+    }
     reg0 = regs["reg0"];
     reg1 = regs["reg1"];
     reg2 = regs["reg2"];
@@ -582,8 +716,6 @@ ARCADE::ARCADE(int my_agent_id, map<string, int> regs, string gpu, int id, int m
     agents[2].stun_timer = reg5;
     update_advanced_gpu();
     update_rank();
-    if(gpu == "GAME_OVER")
-        restarting = true;
 }
 
 AGENT& ARCADE::my_agent(){
@@ -598,7 +730,8 @@ void ARCADE::restart(){
         it.second.stun_timer = 0;
     }
     restarting = true;
-    rank = 1;
+    update_advanced_gpu();
+    update_rank();
 }
 
 
@@ -648,7 +781,7 @@ void ARCADE::update_rank(){
 
 void ARCADE::update_advanced_gpu(){
     string tmp = gpu;
-    tmp[agents[0].position] = '0'; 
+    tmp[agents[0].position] = char(int('0') + agents[0].stun_timer);
     advanced_gpu = gpu + "\n" + tmp;
 }
 
@@ -669,6 +802,11 @@ void ACTION::apply(AGENT &agent, ARCADE &arcade){
         case UP:
             steps = 2;
             agent.position += steps;
+            arcade.my_traversed += steps;
+            if (arcade.gpu[agent.position] == '#')
+            {
+                agent.stun_timer = 3;
+            }
             return;
         case RIGHT:
             steps = 3;
@@ -722,7 +860,7 @@ MCTS_state* TURN::next_state(const MCTS_move *move) const{
 
 queue<MCTS_move*>* TURN::actions_to_try() const{
 	queue<MCTS_move*>* Q = new queue<MCTS_move*>();
-    vector<Action> all_a = {LEFT, UP, DOWN, RIGHT};
+    vector<Action> all_a = {LEFT, UP, RIGHT};
     for(auto a : all_a){
         Q->push(new ACTION(a));
     }
@@ -730,7 +868,7 @@ queue<MCTS_move*>* TURN::actions_to_try() const{
 }
 
 double TURN::rollout() const{
-    vector<Action> all_a = {LEFT, UP, DOWN, RIGHT};
+    vector<Action> all_a = {LEFT, UP, RIGHT};
     int total_traversed = 0;
     for(auto& arcade : arcades)
         total_traversed += arcade.my_traversed;
@@ -743,7 +881,7 @@ double TURN::rollout() const{
         r = rand() % all_a.size();
         ACTION a = ACTION(all_a[r]);
         a_turn.next(a);
-    }while(!a_turn.is_terminal());
+    }while(!a_turn.is_terminal() && a_turn.count - this->count < 12);
     total_traversed = 0;
     for(auto& arcade : arcades)
         total_traversed += arcade.my_traversed;
@@ -752,20 +890,21 @@ double TURN::rollout() const{
 }
 
 int TURN::f_maximal_traversed(){
-    int res;
+    int res = 0;
     for(auto arcade : arcades){
         TURN tmp = *this;
         tmp.arcades = {arcade};
         while(!tmp.is_terminal()){
-            ACTION action = arcade.best_action(arcade.my_agent());
+            ACTION action = arcade.best_action(tmp.arcades[0].my_agent());
             tmp.next(action);
         }
         res += tmp.arcades[0].my_traversed;
     }
-   return res; 
+   return res;
 }
 
 void TURN::next(ACTION action){
+    count++;
     if(action.action == WAIT){
         return;
     }
@@ -774,12 +913,17 @@ void TURN::next(ACTION action){
             arcade.restarting = false;
             continue;
         }
-        for(auto& agent : arcade.agents){
-            if(agent.second.stun_timer > 0){
-                agent.second.stun_timer--;
-            }
+        //for(auto& agent : arcade.agents){
+        //    if(agent.second.stun_timer > 0){
+        //        agent.second.stun_timer--;
+        //    }
+        //}
+        if (arcade.agents[arcade.my_agent_id].stun_timer > 0)
+        {
+            arcade.agents[arcade.my_agent_id].stun_timer--;
+            continue;
         }
-        //cout << action_map[action.action] << endl; 
+        //cout << action_map[action.action] << endl;
         action.apply(arcade.my_agent(), arcade);
         arcade.update_rank();
 
@@ -796,7 +940,6 @@ void TURN::next(ACTION action){
         //cerr << arcade.advanced_gpu;
 
     }
-    count++;
 }
 
 
@@ -809,7 +952,7 @@ int TURN::arcade_perfect_score(int id){
         tmp.next(action);
         res++;
     }
-    return res; 
+    return res;
 }
 
 
@@ -830,9 +973,8 @@ int main()
     cin >> nb_games; cin.ignore();
     cerr << nb_games << endl;
 
-    vector<ARCADE> arcades;
     int max_iter = 10000000;
-    int max_seconds = 50;
+    int max_seconds = 50 ;
 
     //arcades.reserve(nb_games);
     //for (int i = 0; i < nb_games; i++) {
@@ -844,6 +986,7 @@ int main()
 
     // game loop
     while (1) {
+        vector<ARCADE> arcades;
         for (int i = 0; i < 3; i++) {
             string score_info;
             getline(cin, score_info);
@@ -859,7 +1002,7 @@ int main()
             int reg_5;
             int reg_6;
             cin >> gpu >> reg_0 >> reg_1 >> reg_2 >> reg_3 >> reg_4 >> reg_5 >> reg_6; cin.ignore();
-            cerr << gpu << " " << reg_0 << " " << reg_1 << " " << reg_2 << " " << reg_3 << " " << reg_4 << " " << reg_5 << " " << reg_6 << endl; 
+            cerr << gpu << " " << reg_0 << " " << reg_1 << " " << reg_2 << " " << reg_3 << " " << reg_4 << " " << reg_5 << " " << reg_6 << endl;
             ARCADE arcade(player_idx, {{"reg0",reg_0},{"reg1", reg_1},{"reg2", reg_2},{"reg3", reg_3},{"reg4", reg_4},{"reg5", reg_5},{"reg6", reg_6}}, gpu, i, 0);
             arcades.push_back(arcade);
         }
@@ -868,6 +1011,7 @@ int main()
         MCTS_state *state = new TURN(arcades, current_turn);
 		MCTS_tree* tree = new MCTS_tree(state);
 		tree->grow_tree(max_iter, max_seconds);
+        cerr << "gorw tree done" << endl;
 		MCTS_node *best_child = tree->select_best_child();
 		if (best_child == NULL)
 			throw runtime_error("No best child found from main.");
@@ -877,13 +1021,16 @@ int main()
 		{
 			throw runtime_error("Best move is not an action.");
 		}
-        cout << action_map[res->action] << endl;        
+        cerr << res->action <<"----"<< endl;
         current_turn++;
-        
-        return 0;
-        
+        cout << action_map[res->action] << endl;
+        cerr << res->action <<"----"<< endl;
+
+        //return 0;
+
         // Write an action using cout. DON'T FORGET THE "<< endl"
         // To debug: cerr << "Debug messages..." << endl;
     }
 }
+
 
