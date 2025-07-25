@@ -68,7 +68,7 @@ public:
 	double apply(const ActionParams& params); //return damage delt or distance traveled
 	double evaluate();
 	vector<vector<int>> make_snapshot();
-	vector<vector<ActionParams>> generate_move_actions_for(int player);
+	deque<vector<ActionParams>> generate_move_actions_for(int player);
 	void execute_move_actions(vector<ActionParams> actions);
 
 };
@@ -228,11 +228,11 @@ double GAME::apply(const ActionParams& params)
 	return 0;
 }
 
-vector<vector<ActionParams>> GAME::generate_move_actions_for(int player)
+deque<vector<ActionParams>> GAME::generate_move_actions_for(int player)
 {
 	vector<int> l_agents = player == my_id ? my_agents : op_agents;
-	vector<vector<ActionParams>> actions;
-	vector<vector<ActionParams>> tmp_actions = {{}};
+	deque<vector<ActionParams>> actions;
+	deque<vector<ActionParams>> tmp_actions = {{}};
 	for (auto ag : l_agents)
 	{
 		for (const auto& tmp_combo : tmp_actions)
@@ -337,10 +337,17 @@ vector<vector<int>> GAME::make_snapshot()
 //-----------------------------------------------------------------------------------------------
 //-------------------------------------------Q-learning---------------------------------------------
 
-class Q_learning
+void q_learn(GAME game)
 {
-public:
-};
+	map<vector<vector<int>>, deque<vector<ActionParams>>> Q;
+	vector<vector<int>> init_state = game.make_snapshot();
+	Q[init_state] = game.generate_move_actions_for(game.my_id);
+
+	for (auto ac : Q[init_state])
+	{
+
+	}
+}
 
 //-----------------------------------------------------------------------------------------------
 
